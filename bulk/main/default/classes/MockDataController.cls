@@ -1,7 +1,7 @@
 public with sharing class MockDataController {
 
     public static final Integer MAX_RECORDS = 4000000;
-    public static final String baseUrl = URL.getOrgDomainUrl().toExternalForm();
+    public static final String BASE_URL = URL.getOrgDomainUrl().toExternalForm();
 
     @AuraEnabled(cacheable=true)
     public static Map<String, String> getObjects() {
@@ -48,42 +48,94 @@ public with sharing class MockDataController {
     // Generate and insert mock records using Bulk API v2
     @AuraEnabled
     public static String generateMockRecords(String objectName, List<String> selectedFields, Integer recordCount) {
+
         try {
-            if (recordCount > 4000000) {
+            if (recordCount > MAX_RECORDS) {
                 throw getException('Record count exceeds maximum limit of 4,000,000');
             }
+            Integer numReferenceRecords = (recordCount / 100000) + 1;
 
             // Get field metadata
             Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(objectName);
             Map<String, Schema.SObjectField> fieldMap = sObjectType.getDescribe().fields.getMap();
 
-            Set<String> objectToCreate = new Set<String>();
-            for (Schema.SObjectField field: fieldMap.values()) {
+            // Identify referenced objects
+            Map<String, List<String>> referenceFields = new Map<String, List<String>>(); // refObjName -> list of field names
+            for (Schema.SObjectField field : fieldMap.values()) {
                 Schema.DescribeFieldResult describeResult = field.getDescribe();
-                //include if the field is required and not selected to create the data for
-                if (!describeResult.isNillable() && !describeResult.isDefaultedOnCreate() && !selectedFields.contains(describeResult.getName())) {
+                if (describeResult.isCreateable() && !describeResult.isNillable() && !describeResult.isDefaultedOnCreate() && !selectedFields.contains(describeResult.getName())) {
                     selectedFields.add(describeResult.getName());
                 }
                 if (selectedFields.contains(describeResult.getName()) && describeResult.getType() == Schema.DisplayType.REFERENCE) {
-                    // If the field is a reference, ensure it is included in the selected fields
-                    objectToCreate.add(describeResult.getReferenceTo()[0].getDescribe().getName());
+                    String refObj = describeResult.getReferenceTo().isEmpty() ? null : describeResult.getReferenceTo()[0].getDescribe().getName();
+                    if (refObj != null) {
+                        if (!referenceFields.containsKey(refObj)) {
+                            referenceFields.put(refObj, new List<String>());
+                        }
+                        referenceFields.get(refObj).add(describeResult.getName());
+                    }
                 }
             }
 
-            // Prepare CSV content
-            String csvContent = String.join(selectedFields, ',') + '\n';
-            for (Integer i = 0; i < recordCount; i++) {
-                List<String> row = new List<String>();
-                for (String fieldName : selectedFields) {
-                    Schema.DescribeFieldResult field = fieldMap.get(fieldName).getDescribe();
-                    row.add(generateFieldValue(field));
+            // 1. Generate referenced records and store their IDs
+            Map<String, List<Id>> referenceIds = new Map<String, List<Id>>();
+            for (String refObj : referenceFields.keySet()) {
+                List<SObject> refRecords = new List<SObject>();
+                Schema.SObjectType refType = Schema.getGlobalDescribe().get(refObj);
+                Map<String, Schema.SObjectField> refFieldMap = refType.getDescribe().fields.getMap();
+                for (Integer i = 0; i < numReferenceRecords; i++) {
+                    SObject rec = refType.newSObject();
+                    // Populate required fields with random data
+                    for (Schema.SObjectField f : refFieldMap.values()) {
+                        Schema.DescribeFieldResult d = f.getDescribe();
+                        if (!d.isNillable() && !d.isDefaultedOnCreate()) {
+                            rec.put(d.getName(), generateFieldValue(d));
+                        }
+                    }
+                    refRecords.add(rec);
                 }
-                csvContent += String.join(row, ',') + '\n';
+                if (!refRecords.isEmpty()) {
+                    insert refRecords;
+                    referenceIds.put(refObj, new List<Id>());
+                    for (SObject rec : refRecords) {
+                        referenceIds.get(refObj).add((Id)rec.get('Id'));
+                    }
+                }
             }
 
-            // Create Bulk API v2 job
-            String jobId = createBulkJob(objectName, csvContent);
-            return jobId;
+            // 2. Generate main object records in batches
+            Integer batchSize = 10000; // Tune as needed for heap/cpu
+            Integer totalBatches = (Integer)Math.ceil((Decimal)recordCount / batchSize);
+            List<String> jobIds = new List<String>();
+            for (Integer batch = 0; batch < totalBatches; batch++) {
+                Integer startIdx = batch * batchSize;
+                Integer endIdx = Math.min(startIdx + batchSize, recordCount);
+                String csvContent = String.join(selectedFields, ',') + '\n';
+                for (Integer i = startIdx; i < endIdx; i++) {
+                    List<String> row = new List<String>();
+                    for (String fieldName : selectedFields) {
+                        Schema.DescribeFieldResult field = fieldMap.get(fieldName).getDescribe();
+                        if (field.getType() == Schema.DisplayType.REFERENCE) {
+                            String refObj = field.getReferenceTo().isEmpty() ? null : field.getReferenceTo()[0].getDescribe().getName();
+                            if (refObj != null && referenceIds.containsKey(refObj) && !referenceIds.get(refObj).isEmpty()) {
+                                // Assign a random referenced Id
+                                List<Id> ids = referenceIds.get(refObj);
+                                Integer idx = Math.mod(Math.abs(Crypto.getRandomInteger()), ids.size());
+                                row.add('"' + String.valueOf(ids[idx]) + '"');
+                                continue;
+                            }
+                        }
+                        row.add(generateFieldValue(field));
+                    }
+                    csvContent += String.join(row, ',') + '\n';
+                }
+                // 3. Upload batch to Bulk API
+                String jobId = System.enqueueJob(new BulkQueuable(objectName, csvContent));
+                //String jobId = createBulkJob(objectName, csvContent);
+                jobIds.add(jobId);
+            }
+            // Return the first jobId (for backward compatibility), or a comma-separated list
+            return jobIds.isEmpty() ? null : String.join(jobIds, ',');
         } catch (Exception e) {
             throw getException('Error generating records: ' + e.getMessage());
         }
@@ -144,16 +196,27 @@ public with sharing class MockDataController {
         return result;
     }
 
+    public class BulkQueuable implements Queueable, Database.AllowsCallouts {
+        private String objectName;
+        private String csvContent;
+        public BulkQueuable(String objectName, String csvContent) {
+            this.objectName = objectName;
+            this.csvContent = csvContent;
+        }
+        public void execute(QueueableContext context) {
+            createBulkJob(objectName, csvContent);
+        }
+    }
+
     // Create Bulk API v2 job
     private static String createBulkJob(String objectName, String csvContent) {
         HttpRequest req = new HttpRequest();
-        req.setEndpoint(baseUrl + '/services/data/v64.0/jobs/ingest');
+        req.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest');
         req.setMethod('POST');
         req.setHeader('Content-Type', 'application/json');
 
         // Get the page content (this triggers server-side page rendering)
         String sessionId = Page.SessionId.getContent().toString().trim();
-        //if (true) throw getException('=>' + sessionId);
         req.setHeader('Authorization', 'Bearer ' + sessionId);
         
         Map<String, String> jobInfo = new Map<String, String>{
@@ -177,7 +240,7 @@ public with sharing class MockDataController {
         
         // Upload CSV data
         HttpRequest dataReq = new HttpRequest();
-        dataReq.setEndpoint(baseUrl + '/services/data/v64.0/jobs/ingest/' + jobId + '/batches');
+        dataReq.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId + '/batches');
         dataReq.setMethod('PUT');
         dataReq.setHeader('Content-Type', 'text/csv');
         dataReq.setHeader('Authorization', 'Bearer ' + sessionId);
@@ -191,7 +254,7 @@ public with sharing class MockDataController {
         
         // Close job
         HttpRequest closeReq = new HttpRequest();
-        closeReq.setEndpoint(baseUrl + '/services/data/v64.0/jobs/ingest/' + jobId);
+        closeReq.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId);
         closeReq.setMethod('PATCH');
         closeReq.setHeader('Content-Type', 'application/json');
         closeReq.setHeader('Authorization', 'Bearer ' + sessionId);
@@ -211,7 +274,7 @@ public with sharing class MockDataController {
     public static Map<String, Object> checkJobStatus(String jobId) {
         try {
             HttpRequest req = new HttpRequest();
-            req.setEndpoint(baseUrl + '/services/data/v64.0/jobs/ingest/' + jobId);
+            req.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId);
             String sessionId = Page.SessionId.getContent().toString().trim();
             req.setHeader('Authorization', 'Bearer ' + sessionId);
             req.setMethod('GET');
@@ -225,7 +288,8 @@ public with sharing class MockDataController {
             
             return (Map<String, Object>) JSON.deserializeUntyped(res.getBody());
         } catch (Exception e) {
-            throw getException('Error checking job status: ' + e.getMessage());
+            //throw getException('Error checking job status: ' + e.getMessage());
+            return null;
         }
     }
 
