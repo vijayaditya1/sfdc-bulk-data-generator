@@ -1,6 +1,6 @@
 <template>
     <lightning-card title="Mock Data Generator" icon-name="standard:data_streams">
-        <lightning-layout class="slds-p-around_medium">
+        <lightning-layout class="slds-p-around_medium" multiple-rows="true">
             <lightning-layout-item padding="around-medium" size="4">
                 <div class="slds-p-around_medium">
                     <template lwc:if={objectOptions}>
@@ -8,23 +8,20 @@
                             placeholder="Select an Object" options={objectOptions} onchange={handleObjectChange}></lightning-combobox>
                     </template>
 
-                    <template if:true={showFieldSelection}>
+                    <template lwc:if={showFieldSelection}>
                         <lightning-dual-listbox name="fields" label="Select Fields" source-label="Available Fields" selected-label="Selected Fields" options={fields} onchange={handleFieldChange} ></lightning-dual-listbox>
                     </template>
 
                     <lightning-input type="number" label="Number of Records" value={recordCount} min="1" max="4000000" onchange={handleRecordCountChange} ></lightning-input>
                     <lightning-button variant="brand" label="Generate Records" onclick={handleGenerate} disabled={isLoading} class="slds-m-top_medium" ></lightning-button>
 
-                    <template if:true={isLoading}>
+                    <!-- <template lwc:if={isLoading}>
                         <lightning-spinner alternative-text="Processing..."></lightning-spinner>
-                    </template>
-
-                    <template if:true={jobStatus}>
-                        <div class="slds-m-top_medium">
-                            <p>Job Status: {jobStatus}</p>
-                        </div>
-                    </template>
+                    </template> -->
                 </div>
+            </lightning-layout-item>
+            <lightning-layout-item padding="around-medium" size="9" lwc:if={percentage}>
+                <lightning-progress-bar variant="circular" value={percentage} size="large"></lightning-progress-bar>
             </lightning-layout-item>
         </lightning-layout>
         

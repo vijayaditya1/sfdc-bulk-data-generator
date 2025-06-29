@@ -21,7 +21,8 @@ public with sharing class MockDataUtil {
         }
         switch on fieldType {
             when 'STRING', 'TEXTAREA' {
-                return field.getLabel().removeEnd('Name') + generateRandomText(Math.min(length, 5));
+                String text = field.getLabel().removeEnd('Name') + generateRandomText(Math.min(length, 5));
+                return text.right(field.getLength()).trim();
             }
             when 'EMAIL' {
                 return 'test' + generateRandomText(5) + '@test.com';
@@ -41,6 +42,9 @@ public with sharing class MockDataUtil {
             }
             when 'DATETIME' {
                 return DateTime.now().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format();
+            }
+            when 'URL' {
+                return 'www.' + generateRandomText(Math.min(length, 9)).toLowerCase() + '.com';
             }
             when else {
                 return '';

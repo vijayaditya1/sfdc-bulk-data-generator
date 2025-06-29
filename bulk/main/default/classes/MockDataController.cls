@@ -107,15 +107,14 @@ public with sharing class MockDataController {
                 referenceIds.get(MockDataUtil.getDescribe(rec.Id.getSObjectType()).getName()).add((Id) rec.get('Id'));
             }
 
-            String jobId = System.enqueueJob(new BatchSizeEstimatorQueue(objectName, recordCount, selectedFields, fieldMap, referenceIds));
-            // Return the first jobId (for backward compatibility), or a comma-separated list
-            return jobId;
+            CSVRecordBatch batchJob = new CSVRecordBatch(objectName, recordCount, selectedFields, fieldMap, referenceIds);
+            return Database.executeBatch(batchJob, 1);
         } catch (Exception e) {
             throw MockDataUtil.getException('Error generating records: ' + e.getMessage());
         }
     }
 
-    public class BatchSizeEstimatorQueue implements Queueable, Database.AllowsCallouts {
+    /*public class BatchSizeEstimatorQueue implements Queueable, Database.AllowsCallouts {
 
         private String objectName;
         private Integer recordCount;
@@ -186,16 +185,23 @@ public with sharing class MockDataController {
             System.debug('Optimal batch size: ' + optimalBatchSize);
 
             // Now execute the batch with the calculated size
-            CSVRecordBatch batchJob = new CSVRecordBatch(objectName, recordCount, selectedFields, fieldMap, referenceIds, optimalBatchSize);
-            Database.executeBatch(batchJob, 1);
+            //CSVRecordBatch batchJob = new CSVRecordBatch(objectName, recordCount, selectedFields, fieldMap, referenceIds, optimalBatchSize);
+            //Database.executeBatch(batchJob, 1);
         }
-    }
+    }*/
 
     // Check job status
     @AuraEnabled
-    public static Map<String, Object> checkJobStatus(String jobId) {
+    public static AsyncApexJob checkJobStatus(String jobId) {
         try {
-            HttpRequest req = new HttpRequest();
+
+            List<AsyncApexJob> job = [SELECT Id, ApexClassId, jobtype, Status, JobItemsProcessed, TotalJobItems, NumberOfErrors FROM AsyncApexJob where Id = :jobId WITH SYSTEM_MODE];
+            if (job.isEmpty()) {
+                return null;
+            }
+            return job[0];
+
+            /*HttpRequest req = new HttpRequest();
             req.setEndpoint(MockDataUtil.BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId);
             String sessionId = Page.SessionId.getContent().toString().trim();
             req.setHeader('Authorization', 'Bearer ' + sessionId);
@@ -208,7 +214,7 @@ public with sharing class MockDataController {
                 throw MockDataUtil.getException('Failed to check job status: ' + res.getBody());
             }
             
-            return (Map<String, Object>) JSON.deserializeUntyped(res.getBody());
+            return (Map<String, Object>) JSON.deserializeUntyped(res.getBody());*/
         } catch (Exception e) {
             //throw MockDataUtil.getException('Error checking job status: ' + e.getMessage());
             return null;

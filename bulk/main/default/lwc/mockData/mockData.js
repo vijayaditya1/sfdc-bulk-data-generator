@@ -13,8 +13,9 @@ export default class MockData extends LightningElement {
     recordCount = 1000;
     isLoading = false;
     jobId = null;
-    jobStatus = null;
     showFieldSelection = false;
+
+    percentage;
 
     @wire(getObjects)
     wiredObjects({ error, data }) {
@@ -73,6 +74,7 @@ export default class MockData extends LightningElement {
         }
 
         this.isLoading = true;
+        this.percentage = 1;
         try {
             this.jobId = await generateMockRecords({
                 objectName: this.selectedObject,
@@ -92,15 +94,18 @@ export default class MockData extends LightningElement {
         const interval = setInterval(async () => {
             try {
                 const status = await checkJobStatus({ jobId: this.jobId });
-                this.jobStatus = status.state;
-                if (status.state === 'JobComplete' || status.state === 'Failed' || status.state === 'Aborted') {
+                console.log(JSON.stringify(status));
+                if (status.Status == 'Completed' || status.state === 'Failed' || status.state === 'Aborted') {
                     clearInterval(interval);
                     this.isLoading = false;
+                    this.percentage = (status.JobItemsProcessed * 100) / status.TotalJobItems;
                     this.showToast(
-                        status.state === 'JobComplete' ? 'Success' : 'Error',
-                        `Job ${status.state}. Records processed: ${status.numberRecordsProcessed}`,
-                        status.state === 'JobComplete' ? 'success' : 'error'
+                        status.Status === 'Completed' ? 'Success' : 'Error',
+                        `Records processed`,
+                        status.Status === 'Completed' ? 'success' : 'error'
                     );
+                } else {
+                    this.percentage = (status.JobItemsProcessed * 100) / status.TotalJobItems;
                 }
             } catch (error) {
                 clearInterval(interval);
