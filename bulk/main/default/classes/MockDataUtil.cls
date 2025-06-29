@@ -6,10 +6,22 @@ public with sharing class MockDataUtil {
     public static String generateFieldValue(Schema.DescribeFieldResult field) {
         String fieldType = String.valueOf(field.getType());
         Integer length = field.getLength();
-        
+        String fieldName = field.getName();
+        // Dynamically handle address fields with country/state picklist
+        if (fieldName.endsWith('CountryCode')) {
+            return 'US';
+        } else if (fieldName.endsWith('StateCode')) {
+            return 'CA';
+        } else if (fieldName.endsWith('Country')) {
+            return 'United States';
+        } else if (fieldName.endsWith('State')) {
+            return 'California';
+        } else if (fieldName.endsWith('Longitude') || fieldName.endsWith('Latitude')) {
+            return null;
+        }
         switch on fieldType {
             when 'STRING', 'TEXTAREA' {
-                return generateRandomText(Math.min(length, 20));
+                return field.getLabel().removeEnd('Name') + generateRandomText(Math.min(length, 5));
             }
             when 'EMAIL' {
                 return 'test' + generateRandomText(5) + '@test.com';

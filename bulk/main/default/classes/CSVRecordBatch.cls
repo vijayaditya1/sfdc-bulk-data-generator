@@ -58,6 +58,7 @@ public with sharing class CSVRecordBatch implements Database.Batchable<Integer>,
         }
 
         String csvContent = String.join(csvRows, '\n');
+        System.debug('csvContent: ' + csvContent);
         createBulkJob(objectName, csvContent);
     }
 
