@@ -1,7 +1,9 @@
 public with sharing class MockDataController {
 
     public static final Integer MAX_RECORDS = 4000000;
-    public static final String BASE_URL = URL.getOrgDomainUrl().toExternalForm();
+    
+    public static final Integer HEAP_LIMIT = Limits.getLimitHeapSize();
+    public static final Integer TIME_LIMIT = Limits.getLimitCpuTime();
 
     @AuraEnabled(cacheable=true)
     public static Map<String, String> getObjects() {
@@ -16,19 +18,19 @@ public with sharing class MockDataController {
             }
             return objects;
         } catch (Exception e) {
-            throw getException('Error retrieving objects: ' + e.getMessage());
+            throw MockDataUtil.getException('Error retrieving objects: ' + e.getMessage());
         }
     }
 
     // Get object fields metadata
     @AuraEnabled(cacheable=true)
-    public static List<FieldConfig> getObjectFields(String objectName) {
+    public static List<MockDataUtil.FieldConfig> getObjectFields(String objectName) {
         try {
-            List<FieldConfig> fields = new List<FieldConfig>();
+            List<MockDataUtil.FieldConfig> fields = new List<MockDataUtil.FieldConfig>();
             
             Schema.SObjectType sObjectType = Schema.getGlobalDescribe().get(objectName);
             if (sObjectType == null) {
-                throw getException('Invalid object name');
+                throw MockDataUtil.getException('Invalid object name');
             }
 
             Map<String, Schema.SObjectField> fieldMap = sObjectType.getDescribe().fields.getMap();
@@ -36,12 +38,12 @@ public with sharing class MockDataController {
             for (String fieldName : fieldMap.keySet()) {
                 Schema.DescribeFieldResult field = fieldMap.get(fieldName).getDescribe();
                 if (field.isCreateable()) {
-                    fields.add(new FieldConfig(field.getLabel(), field.getName()));
+                    fields.add(new MockDataUtil.FieldConfig(field.getLabel(), field.getName()));
                 }
             }
             return fields;
         } catch (Exception e) {
-            throw getException('Error retrieving fields: ' + e.getMessage());
+            throw MockDataUtil.getException('Error retrieving fields: ' + e.getMessage());
         }
     }
 
@@ -51,7 +53,7 @@ public with sharing class MockDataController {
 
         try {
             if (recordCount > MAX_RECORDS) {
-                throw getException('Record count exceeds maximum limit of 4,000,000');
+                throw MockDataUtil.getException('Record count exceeds maximum limit of 4,000,000');
             }
             Integer numReferenceRecords = (recordCount / 100000) + 1;
 
@@ -78,6 +80,7 @@ public with sharing class MockDataController {
             }
 
             // 1. Generate referenced records and store their IDs
+            List<SObject> refAllRecords = new List<SObject>();
             Map<String, List<Id>> referenceIds = new Map<String, List<Id>>();
             for (String refObj : referenceFields.keySet()) {
                 List<SObject> refRecords = new List<SObject>();
@@ -89,184 +92,103 @@ public with sharing class MockDataController {
                     for (Schema.SObjectField f : refFieldMap.values()) {
                         Schema.DescribeFieldResult d = f.getDescribe();
                         if (!d.isNillable() && !d.isDefaultedOnCreate()) {
-                            rec.put(d.getName(), generateFieldValue(d));
+                            rec.put(d.getName(), MockDataUtil.generateFieldValue(d));
                         }
                     }
                     refRecords.add(rec);
                 }
                 if (!refRecords.isEmpty()) {
-                    insert refRecords;
+                    refAllRecords.addAll(refRecords);
                     referenceIds.put(refObj, new List<Id>());
-                    for (SObject rec : refRecords) {
-                        referenceIds.get(refObj).add((Id)rec.get('Id'));
-                    }
                 }
+            }
+            insert refAllRecords;
+            for (SObject rec : refAllRecords) {
+                referenceIds.get(MockDataUtil.getDescribe(rec.Id.getSObjectType()).getName()).add((Id) rec.get('Id'));
             }
 
-            // 2. Generate main object records in batches
-            Integer batchSize = 10000; // Tune as needed for heap/cpu
-            Integer totalBatches = (Integer)Math.ceil((Decimal)recordCount / batchSize);
-            List<String> jobIds = new List<String>();
-            for (Integer batch = 0; batch < totalBatches; batch++) {
-                Integer startIdx = batch * batchSize;
-                Integer endIdx = Math.min(startIdx + batchSize, recordCount);
-                String csvContent = String.join(selectedFields, ',') + '\n';
-                for (Integer i = startIdx; i < endIdx; i++) {
-                    List<String> row = new List<String>();
-                    for (String fieldName : selectedFields) {
-                        Schema.DescribeFieldResult field = fieldMap.get(fieldName).getDescribe();
-                        if (field.getType() == Schema.DisplayType.REFERENCE) {
-                            String refObj = field.getReferenceTo().isEmpty() ? null : field.getReferenceTo()[0].getDescribe().getName();
-                            if (refObj != null && referenceIds.containsKey(refObj) && !referenceIds.get(refObj).isEmpty()) {
-                                // Assign a random referenced Id
-                                List<Id> ids = referenceIds.get(refObj);
-                                Integer idx = Math.mod(Math.abs(Crypto.getRandomInteger()), ids.size());
-                                row.add('"' + String.valueOf(ids[idx]) + '"');
-                                continue;
-                            }
-                        }
-                        row.add(generateFieldValue(field));
-                    }
-                    csvContent += String.join(row, ',') + '\n';
-                }
-                // 3. Upload batch to Bulk API
-                String jobId = System.enqueueJob(new BulkQueuable(objectName, csvContent));
-                //String jobId = createBulkJob(objectName, csvContent);
-                jobIds.add(jobId);
-            }
+            String jobId = System.enqueueJob(new BatchSizeEstimatorQueue(objectName, recordCount, selectedFields, fieldMap, referenceIds));
             // Return the first jobId (for backward compatibility), or a comma-separated list
-            return jobIds.isEmpty() ? null : String.join(jobIds, ',');
+            return jobId;
         } catch (Exception e) {
-            throw getException('Error generating records: ' + e.getMessage());
+            throw MockDataUtil.getException('Error generating records: ' + e.getMessage());
         }
     }
 
-    // Generate random field value based on field type
-    private static String generateFieldValue(Schema.DescribeFieldResult field) {
-        String fieldType = String.valueOf(field.getType());
-        Integer length = field.getLength();
-        
-        switch on fieldType {
-            when 'STRING', 'TEXTAREA' {
-                return generateRandomText(Math.min(length, 20));
-            }
-            when 'EMAIL' {
-                return 'test' + generateRandomText(5) + '@test.com';
-            }
-            when 'PHONE' {
-                return generateRandomPhone();
-            }
-            when 'PICKLIST' {
-                List<Schema.PicklistEntry> entries = field.getPicklistValues();
-                return entries.isEmpty() ? '' : entries[Math.mod(Math.abs(Crypto.getRandomInteger()), entries.size())].getValue();
-            }
-            when 'INTEGER', 'DOUBLE', 'CURRENCY', 'PERCENT' {
-                return String.valueOf(Math.mod(Math.abs(Crypto.getRandomInteger()), 10000));
-            }
-            when 'DATE' {
-                return Date.today().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format();
-            }
-            when 'DATETIME' {
-                return DateTime.now().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format();
-            }
-            when else {
-                return '';
-            }
-        }
-    }
+    public class BatchSizeEstimatorQueue implements Queueable, Database.AllowsCallouts {
 
-    // Generate random string of specified length
-    private static String generateRandomText(Integer length) {
-        String chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        return generateRandomString(chars, length);
-    }
-
-    // Generate random phone number
-    private static String generateRandomPhone() {
-        String chars = '0123456789';
-        return generateRandomString(chars, 10);
-    }
-
-    private static String generateRandomString(String chars, Integer length) {
-        String result = '';
-        for (Integer i = 0; i < length; i++) {
-            Integer idx = Math.mod(Math.abs(Crypto.getRandomInteger()), chars.length());
-            result += chars.substring(idx, idx + 1);
-        }
-        return result;
-    }
-
-    public class BulkQueuable implements Queueable, Database.AllowsCallouts {
         private String objectName;
-        private String csvContent;
-        public BulkQueuable(String objectName, String csvContent) {
+        private Integer recordCount;
+        private List<String> selectedFields;
+        private Map<String, Schema.SObjectField> fieldMap;
+        private Map<String, List<Id>> referenceIds;
+
+        public BatchSizeEstimatorQueue(String objectName, Integer recordCount, List<String> selectedFields,
+                                    Map<String, Schema.SObjectField> fieldMap,
+                                    Map<String, List<Id>> referenceIds) {
             this.objectName = objectName;
-            this.csvContent = csvContent;
+            this.recordCount = recordCount;
+            this.selectedFields = selectedFields;
+            this.fieldMap = fieldMap;
+            this.referenceIds = referenceIds;
         }
+
         public void execute(QueueableContext context) {
-            createBulkJob(objectName, csvContent);
-        }
-    }
+            // Sample N records to estimate
+            Integer sampleSize = 20;
+            Integer heapStart = Limits.getHeapSize();
+            Long cpuStart = Limits.getCpuTime();
 
-    // Create Bulk API v2 job
-    private static String createBulkJob(String objectName, String csvContent) {
-        HttpRequest req = new HttpRequest();
-        req.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest');
-        req.setMethod('POST');
-        req.setHeader('Content-Type', 'application/json');
+            Map<String, Schema.DescribeFieldResult> fieldDescribeMap = new Map<String, Schema.DescribeFieldResult>();
+            for (String fieldName : selectedFields) {
+                fieldDescribeMap.put(fieldName, fieldMap.get(fieldName).getDescribe());
+            }
 
-        // Get the page content (this triggers server-side page rendering)
-        String sessionId = Page.SessionId.getContent().toString().trim();
-        req.setHeader('Authorization', 'Bearer ' + sessionId);
-        
-        Map<String, String> jobInfo = new Map<String, String>{
-            'object' => objectName,
-            'contentType' => 'CSV',
-            'operation' => 'insert',
-            'lineEnding' => 'LF'
-        };
-        
-        req.setBody(JSON.serialize(jobInfo));
-        
-        Http http = new Http();
-        HttpResponse res = http.send(req);
-        
-        if (res.getStatusCode() != 200) {
-            throw getException('Failed to create bulk job: ' + res.getBody());
+            List<String> rows = new List<String>();
+
+            for (Integer i = 0; i < sampleSize; i++) {
+                List<String> row = new List<String>();
+                for (String fieldName : selectedFields) {
+                    Schema.DescribeFieldResult field = fieldDescribeMap.get(fieldName);
+                    if (field.getType() == Schema.DisplayType.REFERENCE) {
+                        String refObj = field.getReferenceTo().isEmpty() ? null : field.getReferenceTo()[0].getDescribe().getName();
+                        if (refObj != null && referenceIds.containsKey(refObj) && !referenceIds.get(refObj).isEmpty()) {
+                            List<Id> ids = referenceIds.get(refObj);
+                            Integer idx = Math.mod(Math.abs(Crypto.getRandomInteger()), ids.size());
+                            row.add('"' + String.valueOf(ids[idx]) + '"');
+                            continue;
+                        }
+                    }
+                    row.add(MockDataUtil.generateFieldValue(field));
+                }
+                rows.add(String.join(row, ','));
+            }
+
+            Integer heapUsed = Limits.getHeapSize() - heapStart;
+            Long cpuUsed = Limits.getCpuTime() - cpuStart;
+            Integer csvSize = String.join(rows, '\n').length();
+
+            // Estimate per record
+            Decimal heapPerRecord = heapUsed / (Decimal)sampleSize;
+            Decimal cpuPerRecord = cpuUsed / (Decimal)sampleSize;
+            Decimal avgCsvSizePerRecord = csvSize / (Decimal)sampleSize;
+
+            // Use safe thresholds (heap: 3500000, cpu: 40000, csv: 100MB)
+            Integer safeHeapLimit = 3500000;
+            Integer safeCpuLimit = 40000;
+            Integer safeCsvSize = 100000000; //approx
+
+            Integer maxByHeap = Math.floor(safeHeapLimit / heapPerRecord).intValue();
+            Integer maxByCpu = Math.floor(safeCpuLimit / cpuPerRecord).intValue();
+            Integer maxByCsv = Math.floor(safeCsvSize / avgCsvSizePerRecord).intValue();
+
+            Integer optimalBatchSize = Math.min(Math.min(maxByHeap, maxByCpu), maxByCsv);
+            System.debug('Optimal batch size: ' + optimalBatchSize);
+
+            // Now execute the batch with the calculated size
+            CSVRecordBatch batchJob = new CSVRecordBatch(objectName, recordCount, selectedFields, fieldMap, referenceIds, optimalBatchSize);
+            Database.executeBatch(batchJob, 1);
         }
-        
-        Map<String, Object> jobResponse = (Map<String, Object>) JSON.deserializeUntyped(res.getBody());
-        String jobId = (String) jobResponse.get('id');
-        
-        // Upload CSV data
-        HttpRequest dataReq = new HttpRequest();
-        dataReq.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId + '/batches');
-        dataReq.setMethod('PUT');
-        dataReq.setHeader('Content-Type', 'text/csv');
-        dataReq.setHeader('Authorization', 'Bearer ' + sessionId);
-        dataReq.setBody(csvContent);
-        
-        HttpResponse dataRes = http.send(dataReq);
-        
-        if (dataRes.getStatusCode() != 201) {
-            throw getException('Failed to upload CSV data: ' + dataRes.getBody());
-        }
-        
-        // Close job
-        HttpRequest closeReq = new HttpRequest();
-        closeReq.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId);
-        closeReq.setMethod('PATCH');
-        closeReq.setHeader('Content-Type', 'application/json');
-        closeReq.setHeader('Authorization', 'Bearer ' + sessionId);
-        closeReq.setBody('{"state":"UploadComplete"}');
-        
-        HttpResponse closeRes = http.send(closeReq);
-        
-        if (closeRes.getStatusCode() != 200) {
-            throw getException('Failed to close bulk job: ' + closeRes.getBody());
-        }
-        
-        return jobId;
     }
 
     // Check job status
@@ -274,7 +196,7 @@ public with sharing class MockDataController {
     public static Map<String, Object> checkJobStatus(String jobId) {
         try {
             HttpRequest req = new HttpRequest();
-            req.setEndpoint(BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId);
+            req.setEndpoint(MockDataUtil.BASE_URL + '/services/data/v64.0/jobs/ingest/' + jobId);
             String sessionId = Page.SessionId.getContent().toString().trim();
             req.setHeader('Authorization', 'Bearer ' + sessionId);
             req.setMethod('GET');
@@ -283,30 +205,13 @@ public with sharing class MockDataController {
             HttpResponse res = http.send(req);
             
             if (res.getStatusCode() != 200) {
-                throw getException('Failed to check job status: ' + res.getBody());
+                throw MockDataUtil.getException('Failed to check job status: ' + res.getBody());
             }
             
             return (Map<String, Object>) JSON.deserializeUntyped(res.getBody());
         } catch (Exception e) {
-            //throw getException('Error checking job status: ' + e.getMessage());
+            //throw MockDataUtil.getException('Error checking job status: ' + e.getMessage());
             return null;
-        }
-    }
-
-    private static AuraHandledException getException(String message) {
-        AuraHandledException ahe = new AuraHandledException(message);
-        ahe.setMessage(message);
-        return ahe;
-    }
-
-    // Class to hold field metadata and generation logic
-    public class FieldConfig {
-        @AuraEnabled public String label;
-        @AuraEnabled public String value;
-        
-        public FieldConfig(String label, String value) {
-            this.label = label;
-            this.value = value;
         }
     }
 }
