@@ -30,7 +30,7 @@ public with sharing class MockDataUtil {
             when 'PHONE' {
                 return generateRandomPhone();
             }
-            when 'PICKLIST' {
+            when 'PICKLIST', 'MULTIPICKLIST' {
                 List<Schema.PicklistEntry> entries = field.getPicklistValues();
                 return entries.isEmpty() ? '' : entries[Math.mod(Math.abs(Crypto.getRandomInteger()), entries.size())].getValue();
             }
