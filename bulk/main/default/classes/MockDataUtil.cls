@@ -34,14 +34,22 @@ public with sharing class MockDataUtil {
                 List<Schema.PicklistEntry> entries = field.getPicklistValues();
                 return entries.isEmpty() ? '' : entries[Math.mod(Math.abs(Crypto.getRandomInteger()), entries.size())].getValue();
             }
-            when 'INTEGER', 'DOUBLE', 'CURRENCY', 'PERCENT' {
-                return String.valueOf(Math.mod(Math.abs(Crypto.getRandomInteger()), 10000));
+            when 'INTEGER', 'DOUBLE', 'CURRENCY' {
+                String textNumber = String.valueOf(Math.mod(Math.abs(Crypto.getRandomInteger()), 10000));
+                return textNumber.left(field.getPrecision() - field.getScale()).trim();
+            }
+            when 'PERCENT' {
+                return String.valueOf(Math.mod(Math.abs(Crypto.getRandomInteger()), 100));
             }
             when 'DATE' {
-                return Date.today().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format();
+                return DateTime.now().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format('yyyy-MM-dd');
             }
             when 'DATETIME' {
-                return DateTime.now().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format();
+                return DateTime.now().addDays(Math.mod(Math.abs(Crypto.getRandomInteger()), 365)).format('yyyy-MM-ddTHH:mm:ss.SSSZ');
+            }
+            when 'TIME' {
+                Integer num = Math.abs(Crypto.getRandomInteger());
+                return (Math.mod(num, 24) + ':').leftPad(3, '0') + (Math.mod(num, 60) + ':').leftPad(3, '0') + (Math.mod(num, 24) + '').leftPad(2, '0');
             }
             when 'URL' {
                 return 'www.' + generateRandomText(Math.min(length, 9)).toLowerCase() + '.com';

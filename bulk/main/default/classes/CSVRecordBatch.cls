@@ -69,7 +69,7 @@ public with sharing class CSVRecordBatch implements Database.Batchable<Integer>,
         this.optimalBatchSize = Math.min(Math.min(maxByHeap, maxByCpu), maxByCsv);
         System.debug('Optimal batch size: ' + optimalBatchSize);
 
-        this.optimalBatchSize = 10;
+        //this.optimalBatchSize = 10;
 
         List<Integer> startIndexes = new List<Integer>();
         for (Integer i = 0; i < recordCount; i += optimalBatchSize) {

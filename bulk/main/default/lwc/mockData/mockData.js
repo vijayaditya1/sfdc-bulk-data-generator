@@ -81,7 +81,7 @@ export default class MockData extends LightningElement {
                 selectedFields: this.selectedFields,
                 recordCount: this.recordCount
             });
-            this.showToast('Success', 'Bulk job created. Job ID: ' + this.jobId, 'success');
+            this.showToast('Success', 'Process initiated. Job ID: ' + this.jobId, 'success');
             this.checkJobProgress();
         } catch (error) {
             this.showToast('Error', error.body.message, 'error');
@@ -95,13 +95,13 @@ export default class MockData extends LightningElement {
             try {
                 const status = await checkJobStatus({ jobId: this.jobId });
                 console.log(JSON.stringify(status));
-                if (status.Status == 'Completed' || status.state === 'Failed' || status.state === 'Aborted') {
+                if (status.Status == 'Completed' || status.Status === 'Failed' || status.Status === 'Aborted') {
                     clearInterval(interval);
                     this.isLoading = false;
                     this.percentage = (status.JobItemsProcessed * 100) / status.TotalJobItems;
                     this.showToast(
                         status.Status === 'Completed' ? 'Success' : 'Error',
-                        `Records processed`,
+                        'Batch process ' + status.Status,
                         status.Status === 'Completed' ? 'success' : 'error'
                     );
                 } else {
