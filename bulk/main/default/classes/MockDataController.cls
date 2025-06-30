@@ -114,82 +114,6 @@ public with sharing class MockDataController {
         }
     }
 
-    /*public class BatchSizeEstimatorQueue implements Queueable, Database.AllowsCallouts {
-
-        private String objectName;
-        private Integer recordCount;
-        private List<String> selectedFields;
-        private Map<String, Schema.SObjectField> fieldMap;
-        private Map<String, List<Id>> referenceIds;
-
-        public BatchSizeEstimatorQueue(String objectName, Integer recordCount, List<String> selectedFields,
-                                    Map<String, Schema.SObjectField> fieldMap,
-                                    Map<String, List<Id>> referenceIds) {
-            this.objectName = objectName;
-            this.recordCount = recordCount;
-            this.selectedFields = selectedFields;
-            this.fieldMap = fieldMap;
-            this.referenceIds = referenceIds;
-        }
-
-        public void execute(QueueableContext context) {
-            // Sample N records to estimate
-            Integer sampleSize = 20;
-            Integer heapStart = Limits.getHeapSize();
-            Long cpuStart = Limits.getCpuTime();
-
-            Map<String, Schema.DescribeFieldResult> fieldDescribeMap = new Map<String, Schema.DescribeFieldResult>();
-            for (String fieldName : selectedFields) {
-                fieldDescribeMap.put(fieldName, fieldMap.get(fieldName).getDescribe());
-            }
-
-            List<String> rows = new List<String>();
-
-            for (Integer i = 0; i < sampleSize; i++) {
-                List<String> row = new List<String>();
-                for (String fieldName : selectedFields) {
-                    Schema.DescribeFieldResult field = fieldDescribeMap.get(fieldName);
-                    if (field.getType() == Schema.DisplayType.REFERENCE) {
-                        String refObj = field.getReferenceTo().isEmpty() ? null : field.getReferenceTo()[0].getDescribe().getName();
-                        if (refObj != null && referenceIds.containsKey(refObj) && !referenceIds.get(refObj).isEmpty()) {
-                            List<Id> ids = referenceIds.get(refObj);
-                            Integer idx = Math.mod(Math.abs(Crypto.getRandomInteger()), ids.size());
-                            row.add('"' + String.valueOf(ids[idx]) + '"');
-                            continue;
-                        }
-                    }
-                    row.add(MockDataUtil.generateFieldValue(field));
-                }
-                rows.add(String.join(row, ','));
-            }
-
-            Integer heapUsed = Limits.getHeapSize() - heapStart;
-            Long cpuUsed = Limits.getCpuTime() - cpuStart;
-            Integer csvSize = String.join(rows, '\n').length();
-
-            // Estimate per record
-            Decimal heapPerRecord = heapUsed / (Decimal)sampleSize;
-            Decimal cpuPerRecord = cpuUsed / (Decimal)sampleSize;
-            Decimal avgCsvSizePerRecord = csvSize / (Decimal)sampleSize;
-
-            // Use safe thresholds (heap: 3500000, cpu: 40000, csv: 100MB)
-            Integer safeHeapLimit = 3500000;
-            Integer safeCpuLimit = 40000;
-            Integer safeCsvSize = 100000000; //approx
-
-            Integer maxByHeap = Math.floor(safeHeapLimit / heapPerRecord).intValue();
-            Integer maxByCpu = Math.floor(safeCpuLimit / cpuPerRecord).intValue();
-            Integer maxByCsv = Math.floor(safeCsvSize / avgCsvSizePerRecord).intValue();
-
-            Integer optimalBatchSize = Math.min(Math.min(maxByHeap, maxByCpu), maxByCsv);
-            System.debug('Optimal batch size: ' + optimalBatchSize);
-
-            // Now execute the batch with the calculated size
-            //CSVRecordBatch batchJob = new CSVRecordBatch(objectName, recordCount, selectedFields, fieldMap, referenceIds, optimalBatchSize);
-            //Database.executeBatch(batchJob, 1);
-        }
-    }*/
-
     // Check job status
     @AuraEnabled
     public static AsyncApexJob checkJobStatus(String jobId) {
@@ -216,7 +140,6 @@ public with sharing class MockDataController {
             
             return (Map<String, Object>) JSON.deserializeUntyped(res.getBody());*/
         } catch (Exception e) {
-            //throw MockDataUtil.getException('Error checking job status: ' + e.getMessage());
             return null;
         }
     }

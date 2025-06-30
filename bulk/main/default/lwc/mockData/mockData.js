@@ -35,6 +35,7 @@ export default class MockData extends LightningElement {
         this.selectedObject = event.detail.value;
         this.showFieldSelection = true;
         this.fields = [];
+        this.values = []
         this.selectedFields = [];
     }
 
@@ -117,6 +118,6 @@ export default class MockData extends LightningElement {
 
     // Show toast notification
     showToast(label, message, variant) {
-        Toast.show({ label, message, variant }, this);
+        Toast.show({ label, message, variant, mode: "dismissible" }, this);
     }
 }
