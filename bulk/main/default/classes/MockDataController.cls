@@ -92,7 +92,7 @@ public with sharing class MockDataController {
                     for (Schema.SObjectField f : refFieldMap.values()) {
                         Schema.DescribeFieldResult d = f.getDescribe();
                         if (!d.isNillable() && !d.isDefaultedOnCreate()) {
-                            rec.put(d.getName(), MockDataUtil.generateFieldValue(d));
+                            rec.put(d.getName(), MockDataUtil.generateFieldValue(rec, d));
                         }
                     }
                     refRecords.add(rec);

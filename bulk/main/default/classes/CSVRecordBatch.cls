@@ -32,6 +32,8 @@ public with sharing class CSVRecordBatch implements Database.Batchable<Integer>,
 
         for (Integer i = 0; i < sampleSize; i++) {
             List<String> row = new List<String>();
+            Type t = Type.forName(objectName);
+            SObject sobj = (SObject)t.newInstance();
             for (String fieldName : selectedFields) {
                 Schema.DescribeFieldResult field = fieldDescribeMap.get(fieldName);
                 if (field.getType() == Schema.DisplayType.REFERENCE) {
@@ -43,7 +45,9 @@ public with sharing class CSVRecordBatch implements Database.Batchable<Integer>,
                         continue;
                     }
                 }
-                row.add(MockDataUtil.generateFieldValue(field));
+                String value = MockDataUtil.generateFieldValue(sobj, field);
+                sobj.put(fieldName, value);
+                row.add(value);
             }
             rows.add(String.join(row, ','));
         }
@@ -92,6 +96,8 @@ public with sharing class CSVRecordBatch implements Database.Batchable<Integer>,
 
         for (Integer i = startIdx; i < endIdx; i++) {
             List<String> row = new List<String>();
+            Type t = Type.forName(objectName);
+            SObject sobj = (SObject)t.newInstance();
             for (String fieldName: selectedFields) {
                 Schema.DescribeFieldResult field = fieldDescribeMap.get(fieldName);
                 if (field.getType() == Schema.DisplayType.REFERENCE) {
@@ -103,7 +109,9 @@ public with sharing class CSVRecordBatch implements Database.Batchable<Integer>,
                         continue;
                     }
                 }
-                row.add(MockDataUtil.generateFieldValue(field));
+                String value = MockDataUtil.generateFieldValue(sobj, field);
+                sobj.put(fieldName, value);
+                row.add(value);
             }
             csvRows.add(String.join(row, ','));
         }

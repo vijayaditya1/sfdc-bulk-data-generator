@@ -3,7 +3,7 @@ public with sharing class MockDataUtil {
     public static final String BASE_URL = URL.getOrgDomainUrl().toExternalForm();
 
     // Generate random field value based on field type
-    public static String generateFieldValue(Schema.DescribeFieldResult field) {
+    public static String generateFieldValue(SObject record, Schema.DescribeFieldResult field) {
         String fieldType = String.valueOf(field.getType());
         Integer length = field.getLength();
         String fieldName = field.getName();
@@ -31,8 +31,23 @@ public with sharing class MockDataUtil {
                 return generateRandomPhone();
             }
             when 'PICKLIST', 'MULTIPICKLIST' {
-                List<Schema.PicklistEntry> entries = field.getPicklistValues();
-                return entries.isEmpty() ? '' : entries[Math.mod(Math.abs(Crypto.getRandomInteger()), entries.size())].getValue();
+                if (field.isDependentPicklist()) {
+                    Schema.SObjectField controller = field.getController();
+                    String controllerValueStored = String.valueOf(record.get(controller.getDescribe().getName()));
+                    if (String.isNotBlank(controllerValueStored)) {
+                        return getDependentPicklistValues(field).get(controllerValueStored)[0];
+                    }
+                    List<Schema.PicklistEntry> entries = controller.getDescribe().getPicklistValues();
+                    String controllerValue = entries.isEmpty() ? '' : entries[Math.mod(Math.abs(Crypto.getRandomInteger()), entries.size())].getValue();
+                    record.put(controller.getDescribe().getName(), controllerValue);
+                    return getDependentPicklistValues(field).get(controllerValue)[0];
+                } else {
+                    if (String.isBlank(String.valueOf(record.get(field.getName())))) {
+                        List<Schema.PicklistEntry> entries = field.getPicklistValues();
+                        return entries.isEmpty() ? '' : entries[Math.mod(Math.abs(Crypto.getRandomInteger()), entries.size())].getValue();
+                    }
+                    return String.valueOf(record.get(field.getName()));
+                }
             }
             when 'INTEGER', 'DOUBLE', 'CURRENCY' {
                 String textNumber = String.valueOf(Math.mod(Math.abs(Crypto.getRandomInteger()), 10000));
@@ -114,5 +129,45 @@ public with sharing class MockDataUtil {
             FIELD_RESULT_CACHE.put(objectToken, objectToken.getDescribe());
         }
         return FIELD_RESULT_CACHE.get(objectToken).fields.getMap().get(fieldName).getDescribe();
+    }
+
+    public static Map<String, List<String>> getDependentPicklistValues(Schema.DescribeFieldResult dependentFieldResult) {
+        Map<String, List<String>> dependentPicklistValues = new Map<String, List<String>>();
+        Schema.sObjectField controllerField = dependentFieldResult.getController();
+        if (controllerField == null) {
+            return null;
+        }
+
+        String BASE_DATA_MAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+        Schema.DescribeFieldResult controllerFieldResult = controllerField.getDescribe();
+        List<Schema.PicklistEntry> controllerValues = (controllerFieldResult.getType() == Schema.DisplayType.Boolean ? null : controllerFieldResult.getPicklistValues());
+        String base64map = BASE_DATA_MAP;
+        
+        for(Schema.PicklistEntry entry : dependentFieldResult.getPicklistValues()){
+            if (entry.isActive()) {
+                map<String,Object> mapEntry = (Map<String, Object>)JSON.deserializeUntyped(JSON.serialize(entry));
+                if(mapEntry != null && mapEntry.containsKey('validFor') && mapEntry.get('validFor') != null &&
+                    ((String)(mapEntry.get('validFor'))) != '' ){
+                    List<String> base64chars = String.valueOf(((Map<String, Object>)JSON.deserializeUntyped(JSON.serialize(entry))).get('validFor')).split('');
+                    if(base64chars != null && !base64chars.isEmpty()){
+                        for (Integer i = 0; i < controllerValues.size(); i++){
+                            Object controllerValue = (controllerValues == null ? (Object) (i == 1) : (Object) (controllerValues[i].isActive() ? controllerValues[i].getLabel() : null));
+                            Integer bitIndex = i/6;
+                            Integer bitShift = 5 - Math.mod(i, 6);
+                            if(controllerValue == null || (base64map.indexOf(base64chars[bitIndex]) & (1 << bitShift)) == 0){
+                                continue;
+                            }
+                            String controllerValueStr = String.valueOf(controllerValue);
+                            if (dependentPicklistValues.containsKey(controllerValueStr)) {
+                                dependentPicklistValues.get(controllerValueStr).add(entry.getValue());
+                            } else {
+                                dependentPicklistValues.put(controllerValueStr, new List<String>{entry.getValue()});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return dependentPicklistValues;
     }
 }
